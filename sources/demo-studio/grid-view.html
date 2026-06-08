@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Grid View</title>
+  <link rel="stylesheet" href="/fonts/fonts.css">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: #0b1020;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    .backHotspot {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 72px;
+      height: 72px;
+      z-index: 9999;
+      background: transparent;
+    }
+
+    .backBtn {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(148,163,184,0.35);
+      background: rgba(13,20,40,0.72);
+      color: #e6eeff;
+      font-size: 12px;
+      text-decoration: none;
+      opacity: 0;
+      transform: translateY(-4px);
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease, background 180ms ease, border-color 180ms ease;
+      backdrop-filter: blur(6px);
+    }
+    .backHotspot:hover .backBtn,
+    .backHotspot:focus-within .backBtn {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .backBtn:hover {
+      border-color: rgba(96,165,250,0.8);
+      background: rgba(13,20,40,0.9);
+    }
+
+    #grid {
+      height: 100vh;
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-radius: 12px;
+      background: #000;
+      display: block;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div class="backHotspot">
+    <button class="backBtn" onclick="location.href='index.html'">← Back</button>
+  </div>
+
+  <div id="grid"></div>
+
+  <script>
+    function qs() { return new URLSearchParams(location.search); }
+    function clampInt(v, min, max, fallback) {
+      const n = parseInt(v, 10);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.max(min, Math.min(max, n));
+    }
+
+    const p = qs();
+    const grid = document.getElementById('grid');
+
+    const rows = clampInt(p.get('rows') || '2', 1, 12, 2);
+    const cols = clampInt(p.get('cols') || '4', 1, 12, 4);
+    const layout = ((p.get('layout') || 'bottom').toLowerCase() === 'right') ? 'right' : 'bottom';
+    const thumb = (p.get('thumb') || '1').trim();
+    const ws = (p.get('ws') || '').trim();
+    const port = (p.get('port') || '').trim();
+
+    const metaFont = (p.get('meta_font') || p.get('fontsize') || '').trim();
+
+    const idsRaw = (p.get('ids') || '');
+    const ids = idsRaw.split(',').map(s => s.trim());
+
+    function makeTileUrl(tileIndex) {
+      const u = new URLSearchParams();
+      u.set('compact', '1');
+      u.set('layout', layout);
+      u.set('thumb', thumb);
+
+      if (metaFont) u.set('meta_font', metaFont);
+
+      const sender = ids[tileIndex - 1] || '';
+      if (sender) u.set('sender', sender);
+      else u.set('id', String(tileIndex));
+
+      if (ws) u.set('ws', ws);
+      if (port) u.set('port', port);
+
+      return `webrtc.html?${u.toString()}`;
+    }
+
+    function build() {
+      grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+      grid.innerHTML = '';
+      const total = rows * cols;
+      for (let i = 1; i <= total; i++) {
+        const f = document.createElement('iframe');
+        f.src = makeTileUrl(i);
+        grid.appendChild(f);
+      }
+    }
+
+    build();
+  </script>
+</body>
+</html>

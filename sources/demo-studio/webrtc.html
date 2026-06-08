@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>WebRTC Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+  <link rel="stylesheet" href="/fonts/fonts.css">
+
+  <style>
+    :root { color-scheme: dark; }
+
+    :root{
+      --meta-h: 90px;
+      --meta-h-min: 60px;
+      --meta-h-max-frac: 0.5;
+
+      --meta-font: 12px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0B1020;
+      color: #E6EEFF;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .statusOverlay {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 50;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: rgba(13, 20, 40, 0.65);
+      border: 1px solid rgba(31, 41, 55, 0.7);
+      backdrop-filter: blur(6px);
+      user-select: none;
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(-3px);
+      transition: opacity 160ms ease, transform 160ms ease;
+      pointer-events: none;
+      max-width: calc(100vw - 24px);
+    }
+    body:hover .statusOverlay,
+    body:focus-within .statusOverlay {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .statusOverlay .label { opacity: .75; font-size: 11.5px; }
+    #status {
+      font-weight: 700;
+      font-size: 12px;
+      color: #fbbf24;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 90px;
+    }
+    #status.ok { color: #86efac; }
+    #status.bad { color: #fb7185; }
+
+    #targetId {
+      font-weight: 600;
+      font-size: 12px;
+      color: #c7d2fe;
+      opacity: 0.95;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 180px;
+    }
+
+    #sender-id {
+      position: absolute;
+      left: -9999px;
+      top: -9999px;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+
+    main {
+      display: grid;
+      grid-template-columns: 1fr min(
+        clamp(140px, 16vw, 260px),
+        45vh
+      );
+      gap: 0;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #leftPane {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      background: #0B1020;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      background: #000;
+      object-fit: contain;
+      min-height: 0;
+      min-width: 0;
+      display: block;
+    }
+
+    body.lock-video-ar #leftPane {
+      aspect-ratio: var(--video-ar);
+      height: auto;
+      align-self: start;
+    }
+    body.lock-video-ar.meta-bottom main {
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    #rightPane {
+      position: relative;
+      display: grid;
+      grid-template-rows: 1fr;
+      border-left: 1px solid #1f2937;
+      background: #0D1428;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #metaBox {
+      overflow: auto;
+      padding: 0;
+      min-height: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: var(--meta-font) !important;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    #rightPane, #rightPane * { font-size: var(--meta-font) !important; }
+
+    #rightThumbWrap { display: none; }
+    #metaThumb {
+      width: 100%;
+      max-height: 140px;
+      object-fit: contain;
+      background: #000;
+      border-radius: 8px;
+      display: none;
+    }
+
+    body.meta-bottom main {
+      grid-template-columns: 1fr;
+      grid-template-rows:
+        auto
+        minmax(var(--meta-h-min), min(calc(var(--meta-h-max-frac) * 100%), var(--meta-h)));
+    }
+    body.meta-bottom #rightPane {
+      border-left: none;
+      border-top: 1px solid #1f2937;
+      display: grid;
+      grid-template-columns: 1fr clamp(140px, 22vw, 260px);
+      grid-template-rows: 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      align-items: stretch;
+    }
+    body.meta-bottom #rightThumbWrap {
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      min-height: 0;
+      overflow: hidden;
+    }
+    body.meta-bottom #metaBox { padding: 0; min-height: 0; }
+
+    body.video-only main {
+      grid-template-columns: 1fr !important;
+      grid-template-rows: 1fr !important;
+    }
+    body.video-only #rightPane { display: none !important; }
+    body.video-only #metaThumb { display: none !important; }
+
+    body.no-thumb #metaThumb { display: none !important; }
+    body.no-thumb #rightThumbWrap { display: none !important; }
+    body.no-thumb.meta-bottom #rightPane { grid-template-columns: 1fr !important; }
+  </style>
+
+  <!-- Scripts -->
+  <script src="adapter-latest.js"></script>
+  <script src="webrtc.js"></script>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const p = new URLSearchParams(location.search);
+
+      const videoOnly = (p.get('video') === '1')
+                        || ((p.get('view') || '').toLowerCase() === 'video');
+      if (videoOnly) document.body.classList.add('video-only');
+
+      const thumb = (p.get('thumb') || '1').trim();
+      if (thumb === '0') document.body.classList.add('no-thumb');
+
+      const layout = (p.get('layout') || '').toLowerCase();
+      const wantBottom = (layout !== 'right');
+      document.body.classList.toggle('meta-bottom', wantBottom);
+
+      const ar = (p.get('videoar') || '').trim();
+      if (ar) {
+        const norm = ar.replace(/\s+/g, '').replace(':', '/');
+        const parts = norm.split('/');
+        if (parts.length === 2 && parts[0] && parts[1]) {
+          document.body.classList.add('lock-video-ar');
+          document.body.style.setProperty('--video-ar', `${parts[0]} / ${parts[1]}`);
+        }
+      }
+
+      const defId = (p.get('id') || p.get('sender') || '').trim();
+      if (defId) {
+        const input = document.getElementById('sender-id');
+        if (input) input.value = defId;
+        window._target_sender_id = defId;
+      }
+
+      const idEl = document.getElementById('targetId');
+      if (idEl) idEl.textContent = String(window._target_sender_id || '—');
+
+      function applyMetaFontFromParams() {
+        const raw = (p.get('meta_font') || p.get('fontsize') || '').trim();
+        if (!raw) return;
+        const num = Number(raw);
+        const isNum = Number.isFinite(num);
+        let px;
+        if (isNum) {
+          const clamped = Math.max(8, Math.min(48, num));
+          px = `${clamped}px`;
+        } else {
+          const m = raw.match(/^(\d+(?:\.\d+)?)/);
+          if (m) {
+            const clamped = Math.max(8, Math.min(48, Number(m[1])));
+            px = `${clamped}px`;
+          } else {
+            px = raw;
+          }
+        }
+        document.documentElement.style.setProperty('--meta-font', px);
+      }
+      applyMetaFontFromParams();
+
+      const rightPane = document.getElementById('rightPane');
+      const ensureMetaBoxSize = () => {
+        const box = document.getElementById('metaBox');
+        if (box) {
+          const cssVal = getComputedStyle(document.documentElement).getPropertyValue('--meta-font').trim() || '12px';
+          box.style.setProperty('font-size', cssVal, 'important');
+        }
+      };
+      if (rightPane) {
+        const mo = new MutationObserver(() => ensureMetaBoxSize());
+        mo.observe(rightPane, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+      }
+
+      ensureMetaBoxSize();
+
+      if (typeof placeThumb === "function") {
+        placeThumb(document.body.classList.contains("meta-bottom") ? "bottom" : "right");
+      }
+
+      websocketServerConnect();
+    });
+  </script>
+</head>
+
+<body>
+  <div class="statusOverlay">
+    <span class="label">S:</span>
+    <span id="status">…</span>
+    <span class="label">ID:</span>
+    <span id="targetId">—</span>
+  </div>
+
+  <input id="sender-id" type="text" aria-hidden="true"/>
+
+  <main>
+    <section id="leftPane">
+      <video id="videoLeft" autoplay playsinline muted></video>
+    </section>
+
+    <section id="rightPane">
+      <pre id="metaBox">…</pre>
+      <div id="rightThumbWrap"></div>
+    </section>
+  </main>
+
+  <img id="metaThumb" alt="thumbnail"/>
+</body>
+</html>

@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Detection Feed View</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body {
+  height:100%; margin:0;
+  background:#0b1020; color:#e6eeff;
+  font-family: system-ui,-apple-system,Segoe UI,Roboto,Inter,sans-serif;
+}
+
+header{
+  height:48px; display:flex; align-items:center; gap:14px;
+  padding:8px 14px; border-bottom:1px solid #1f2937; background:#0d1428;
+  position:sticky; top:0; z-index:10;
+  font-size:14px;
+}
+#back{
+  margin-right: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: #c7d2fe;
+  border: 1px solid #334155;
+  background: #0b1020;
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+header:hover #back { opacity: 1; }
+#status{
+  font-size:12px; padding:4px 8px; border-radius:6px;
+  border:1px solid #334155;
+}
+#status.ok{ border-color:#22c55e; color:#bbf7d0; }
+#status.bad{ border-color:#ef4444; color:#fecaca; }
+main{
+  display:grid;
+  grid-template-columns: minmax(420px,2.2fr) minmax(320px,0.8fr);
+  height:calc(100% - 48px);
+  gap:12px;
+  padding:12px;
+}
+#videoPane{
+  display:flex; align-items:center; justify-content:center;
+  background:#0a0f1e; border:1px solid #1f2937; border-radius:12px;
+  overflow:hidden;
+}
+#video{
+  width:100%; height:100%; object-fit:contain; background:black;
+}
+#feed{
+  overflow-y:auto; padding:10px;
+  background:#0a0f1e; border:1px solid #1f2937; border-radius:12px;
+  display:flex; flex-direction:column; gap:8px;
+}
+
+/* ── no-detections placeholder ── */
+.no-det{
+  border-radius:10px;
+  background:#0b1020;
+  opacity:1;
+  transition: opacity 0.35s ease;
+}
+.subDetections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.subDet {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  border: 1px solid #334155;
+
+  background: linear-gradient(180deg, #0f172a, #0b1020);
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.05),
+    0 4px 10px rgba(0,0,0,.35);
+
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+
+.subDet strong {
+  color: #93c5fd;
+}
+
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  padding: 12px;
+  border-radius: 12px;
+
+  background: linear-gradient(180deg, #0f172a, #0b1020);
+  border: 1px solid #1f2937;
+
+  box-shadow:
+    0 8px 20px rgba(0,0,0,0.35),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.35s ease;
+}
+
+.card.fade { opacity:0; }
+.card-left h4 {
+  margin:0 0 6px 0;
+  font-size:13px;
+  font-weight:700;
+  opacity:.95;
+}
+.card-left .meta {
+  white-space:pre-line;
+  font-size:12.5px;
+  opacity:.92;
+  line-height:1.35;
+}
+.thumb {
+  width:120px; height:80px;
+  object-fit:cover;
+  border-radius:8px;
+  background:#0a0f1e;
+  border:1px solid #334155;
+}
+.controls { margin-left:auto; display:flex; gap:8px; }
+button{
+  cursor:pointer;
+  background:linear-gradient(180deg,#0f172a 0%,#0b1020 100%);
+  border:1px solid #334155; color:#e6eeff; border-radius:10px; padding:6px 10px; font-size:12.5px;
+}
+
+:root { --meta-font: 12px; }
+.card-left .meta { font-size: var(--meta-font) !important; }
+</style>
+</head>
+<body>
+<header>
+  <a id="back" href="index.html">← Back</a>
+  <div id="status">OFF</div>
+  <div>Sender: <span id="sender">—</span></div>
+  <div class="controls">
+    <button id="reconnect" title="Reconnect">Reconnect</button>
+  </div>
+</header>
+
+<main>
+  <section id="videoPane">
+    <video id="video" autoplay playsinline muted></video>
+  </section>
+  <section id="feed" aria-live="polite" aria-busy="false">
+  </section>
+</main>
+
+<script>
+
+const qs = new URLSearchParams(location.search);
+const thumbEnabled = false;
+const metaEnabled = (qs.get("meta") !== "0");
+
+if (!metaEnabled) {
+  // hide meta panel
+  document.getElementById("feed").style.display = "none";
+
+  // make video full width
+  document.querySelector("main").style.gridTemplateColumns = "1fr";
+}
+
+(function applyFeedMetaFont(){
+  const raw = (qs.get("meta_font") || qs.get("fontsize") || "").trim();
+  if (!raw) return;
+  let px;
+  const n = Number(raw);
+  if (Number.isFinite(n)) {
+    const c = Math.max(8, Math.min(48, n));
+    px = `${c}px`;
+  } else {
+    const m = raw.match(/^(\d+(?:\.\d+)?)/);
+    if (m) { const c = Math.max(8, Math.min(48, Number(m[1]))); px = `${c}px`; }
+    else { px = raw; }
+  }
+  document.documentElement.style.setProperty('--meta-font', px);
+})();
+
+function getSenderId(){
+  const id=qs.get("id");
+  if(id) return id;
+  const ids=(qs.get("ids")||"").split(",").map(x=>x.trim()).filter(Boolean);
+  return ids[0]||"";
+}
+function wsURL(){
+  const o=qs.get("ws");
+  const port = qs.get("port") || "8443";
+  return o ? `ws://${o}` : `ws://${location.hostname}:${port}`;
+}
+
+/* ========== UI refs & helpers ========== */
+const statusEl=document.getElementById("status");
+const senderEl=document.getElementById("sender");
+const videoEl=document.getElementById("video");
+const feedEl=document.getElementById("feed");
+function status(t,c){
+  statusEl.textContent=t;
+  statusEl.classList.remove("ok","bad");
+  if(c) statusEl.classList.add(c);
+}
+function revokeURL(url){ try{ URL.revokeObjectURL(url); }catch{} }
+
+function toISOFromMaybeEpoch(v){
+  if (v == null) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
+
+  if (typeof v === "string" && /\d{4}-\d{2}-\d{2}T/.test(v)) return v;
+  let n = Number(v);
+  if (!Number.isFinite(n)) {
+    return String(v);
+  }
+  try {
+    let ms = n;
+    if (n >= 1e12) {
+      ms = n;
+    } else if (n >= 1e9) {
+      ms = n * 1000;
+    } else if (n > 0) {
+      ms = n;
+    }
+    const d = new Date(ms);
+    if (isNaN(d.getTime())) return String(v);
+    return d.toISOString();
+  } catch {
+    return String(v);
+  }
+}
+function extractTimestamp(obj){
+  if (!obj || typeof obj !== "object") return "unknown";
+  if (obj.parameters && obj.parameters.timestamp != null) {
+    const iso = toISOFromMaybeEpoch(obj.parameters.timestamp);
+    if (iso) return iso;
+  }
+
+  if (obj.timestamp != null) {
+    const iso = toISOFromMaybeEpoch(obj.timestamp);
+    if (iso) return iso;
+  }
+  if (obj.meta && obj.meta.timestamp != null) {
+    const iso = toISOFromMaybeEpoch(obj.meta.timestamp);
+    if (iso) return iso;
+  }
+  const od1 = obj?.meta?.object_detection;
+  if (Array.isArray(od1) && od1[0]?.timestamp != null) {
+    const iso = toISOFromMaybeEpoch(od1[0].timestamp);
+    if (iso) return iso;
+  }
+  return "unknown";
+}
+
+/* ========== Feed tile ========== */
+const liveCards = new Map();
+
+function renderLiveDetections(obj){
+  if (!obj.object_detection) return;
+
+  let detections = obj.object_detection.slice();
+
+  detections.sort((a, b) => {
+    const aId = a.tracking_id ?? a.id ?? null;
+    const bId = b.tracking_id ?? b.id ?? null;
+
+    if (aId !== null && bId !== null) return aId - bId;
+    if (aId !== null) return -1;
+    if (bId !== null) return 1;
+
+    return a.rectangle.x - b.rectangle.x;
+  });
+
+  liveCards.forEach(card => card.used = false);
+
+  detections.forEach((o, idx) => {
+
+    const key = o.label + "_" +
+      Math.round(o.rectangle.x * 20) + "_" +
+      Math.round(o.rectangle.y * 20);
+
+    let card = liveCards.get(key);
+
+    if (!card){
+      card = document.createElement("div");
+      card.className = "card";
+
+      const left = document.createElement("div");
+      left.className = "card-left";
+
+      const title = document.createElement("h4");
+      const meta = document.createElement("div");
+      meta.className = "meta";
+
+      // container for nested detections
+      const subWrap = document.createElement("div");
+      subWrap.className = "subDetections";
+
+      left.appendChild(title);
+      left.appendChild(meta);
+      left.appendChild(subWrap);
+
+      card.appendChild(left);
+      feedEl.prepend(card);
+
+      card._title = title;
+      card._meta = meta;
+      card._subWrap = subWrap;
+
+      liveCards.set(key, card);
+    }
+
+    // main info
+    card._title.textContent = `${o.label} #${idx + 1}`;
+    card._meta.textContent =
+    `Confidence: ${o.confidence.toFixed(1)}%
+    X: ${o.rectangle.x.toFixed(2)}   Y: ${o.rectangle.y.toFixed(2)}   W: ${o.rectangle.width.toFixed(2)}   H: ${o.rectangle.height.toFixed(2)}`;
+
+    // clear old nested detections
+    card._subWrap.innerHTML = "";
+
+    // render nested detections as mini cards
+    if (Array.isArray(o.object_detection)) {
+      o.object_detection.forEach(child => {
+        const pill = document.createElement("div");
+        pill.className = "subDet";
+
+        pill.innerHTML = `
+          <strong>${child.label}</strong>
+          ${child.confidence.toFixed(1)}%
+        `;
+
+        card._subWrap.appendChild(pill);
+      });
+    }
+
+    card.used = true;
+  });
+
+  // cleanup removed detections
+  for (const [key, card] of liveCards.entries()){
+    if (!card.used){
+      card.remove();
+      liveCards.delete(key);
+    }
+  }
+}
+
+function addCard(metaText, thumbUrl, timestampISO){
+  const card=document.createElement("div");
+  card.className="card";
+  const left=document.createElement("div");
+  left.className="card-left";
+  const h4=document.createElement("h4");
+  h4.textContent = "Detection · " + (timestampISO || "unknown");
+  const meta=document.createElement("div");
+  meta.className="meta";
+  meta.textContent = metaText || "—";
+  left.appendChild(h4);
+  left.appendChild(meta);
+  const right=document.createElement("div");
+  if(thumbEnabled && thumbUrl){
+    const img=document.createElement("img");
+    img.className="thumb";
+    img.src=thumbUrl;
+    img.alt="thumb";
+    right.appendChild(img);
+  }
+  card.appendChild(left);
+  card.appendChild(right);
+
+  if (feedEl.firstChild) feedEl.insertBefore(card, feedEl.firstChild);
+  else feedEl.appendChild(card);
+
+  setTimeout(()=>card.classList.add("fade"), 2600);
+  setTimeout(()=>card.remove(), 3000);
+}
+
+/* ========== WebRTC / signalling ========== */
+let ws=null, pc=null, dcOpen=false;
+let targetId=getSenderId();
+senderEl.textContent=targetId || "—";
+let lastPretty = "";
+let lastMetaTS = "unknown";
+
+const thumbAssemblies = new Map();
+function cleanupChunks(maxAgeMs=8000){
+  const now = Date.now();
+  for (const [id, rec] of thumbAssemblies.entries()){
+    if (!rec || (now - rec.t0) > maxAgeMs) thumbAssemblies.delete(id);
+  }
+}
+function ensurePC(){
+  if (pc) return pc;
+  pc=new RTCPeerConnection({
+    iceServers:[
+      {urls:"stun:stun.services.mozilla.com"},
+      {urls:"stun:stun.l.google.com:19302"}
+    ]
+  });
+  pc.ontrack=e=>{
+    const s=e.streams&&e.streams[0]?e.streams[0]:new MediaStream([e.track]);
+    videoEl.srcObject=s; videoEl.play().catch(()=>{});
+    status("VIDEO","ok");
+  };
+  pc.ondatachannel=e=>{
+    const ch=e.channel;
+    if(ch.label==="meta") status("META","ok");
+    ch.onopen =()=>{ dcOpen=true; status("META","ok"); };
+    ch.onclose=()=>{ dcOpen=false; status("META OFF","bad"); };
+    ch.onerror=()=> status("META ERR","bad");
+    ch.onmessage=(ev)=>{
+      if (!metaEnabled) return;
+
+      const raw = String(ev.data||"");
+      console.log("RAW META MSG:", raw);
+      let obj=null;
+      try { obj = JSON.parse(raw); } catch {}
+      if (!obj || typeof obj !== "object") {
+        lastPretty = raw.trim();
+        return;
+      }
+      if (obj.type === "meta" || obj.text || obj.meta || obj.parameters) {
+        lastMetaTS = extractTimestamp(obj);
+        if (typeof obj.text === "string") lastPretty = obj.text;
+      }
+
+      if (obj.object_detection) {
+      renderLiveDetections(obj);
+    }
+
+      const t = obj.type;
+      const isThumb = (t==="thumb" || t==="thumb-begin" || t==="thumb-chunk" || t==="thumb-end");
+      if (!isThumb) return;
+      if (!thumbEnabled) return;
+      if (t === "thumb") {
+        const b64 = obj.thumb_jpeg_b64 || obj.buffer_base64 || "";
+        const url = b64ToObjectURL(b64);
+        const ts = extractTimestamp(obj) || lastMetaTS;
+        addCard(lastPretty, url, ts);
+        return;
+      }
+      if (t === "thumb-begin") {
+        cleanupChunks();
+        const id = obj.id;
+        const n = obj.n;
+        if (typeof id === "undefined" || typeof n !== "number" || n<=0) return;
+        const ts = extractTimestamp(obj) || lastMetaTS;
+        thumbAssemblies.set(id, { n, parts:new Array(n), got:0, t0:Date.now(), ts });
+        return;
+      }
+      if (t === "thumb-chunk") {
+        const a = thumbAssemblies.get(obj.id);
+        if (!a) return;
+        const i = obj.i;
+        if (typeof i !== "number" || i<0 || i>=a.n) return;
+        if (typeof obj.data !== "string") return;
+        if (a.parts[i] == null) { a.parts[i] = obj.data; a.got++; }
+        return;
+      }
+      if (t === "thumb-end") {
+        const a = thumbAssemblies.get(obj.id);
+        if (!a) return;
+        const full = (a.got === a.n) ? a.parts.join("") : null;
+        thumbAssemblies.delete(obj.id);
+        const url = full ? b64ToObjectURL(full) : null;
+        addCard(lastPretty, url, a.ts || lastMetaTS);
+        return;
+      }
+    };
+  };
+  pc.onicecandidate=e=>{
+    if(e.candidate && ws && ws.readyState===1){
+      ws.send(JSON.stringify({ice:{candidate:e.candidate.candidate, sdpMLineIndex:e.candidate.sdpMLineIndex}}));
+    }
+  };
+  pc.oniceconnectionstatechange = () => {
+    const st = pc.iceConnectionState;
+    if (st === "failed" || st === "disconnected" || st === "closed") {
+      status("ICE "+st.toUpperCase(),"bad");
+    }
+  };
+  return pc;
+}
+/* base64 → ObjectURL */
+let lastThumbURL=null;
+function b64ToObjectURL(b64){
+  try{
+    if(b64.startsWith("data:image")){
+      const i=b64.indexOf(",");
+      if(i>=0) b64=b64.slice(i+1);
+    }
+    const bin=atob(b64);
+    const arr=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+    const blob=new Blob([arr],{type:"image/jpeg"});
+    if (lastThumbURL) revokeURL(lastThumbURL);
+    lastThumbURL = URL.createObjectURL(blob);
+    return lastThumbURL;
+  }catch{return null;}
+}
+/* WS / signalling */
+async function onWS(ev){
+  const data=ev.data;
+  if(typeof data==="string" && data.startsWith("HELLO")) return;
+  if(data==="SESSION_OK"){
+    try{ ws.send(JSON.stringify({cmd:"READY"})); }catch{}
+    return;
+  }
+  if(typeof data==="string" && data.startsWith("ERROR")){
+    status("ERR","bad"); return;
+  }
+  let msg;
+  try{ msg=JSON.parse(data); }catch{ status("PARSE","bad"); return; }
+  const p=ensurePC();
+  if(msg.sdp){
+    await p.setRemoteDescription(msg.sdp);
+    if(msg.sdp.type==="offer"){
+      const ans=await p.createAnswer();
+      await p.setLocalDescription(ans);
+      ws.send(JSON.stringify({sdp:p.localDescription}));
+    }
+    return;
+  }
+  if(msg.ice){
+    try{ await p.addIceCandidate(new RTCIceCandidate(msg.ice)); }catch{}
+    return;
+  }
+}
+function connectWS(){
+  ws=new WebSocket(wsURL());
+  status("WS",null);
+  ws.onopen=()=>{
+    const peer="v"+Math.floor(Math.random()*90000+10000);
+    ws.send("HELLO "+peer);
+    ws.send("SESSION "+targetId);
+    status("SESSION",null);
+  };
+  ws.onmessage=onWS;
+  ws.onerror=()=>{ status("WS ERR","bad"); retry(); };
+  ws.onclose =()=>{ status("WS OFF","bad"); retry(); };
+}
+function retry(){
+  setTimeout(()=>{
+    try{ws.close();}catch{}
+    ws=null;
+    try{pc && pc.close();}catch{}
+    pc=null;
+    connectWS();
+  }, 1200);
+}
+/* Controls */
+document.getElementById("reconnect").onclick = retry;
+/* Init */
+(function init(){
+  senderEl.textContent = targetId || "—";
+  connectWS();
+})();
+
+
+// DEBUG: fake cards
+// setTimeout(() => {
+//   addCard(
+//     "Confidence: 92%\nPerson detected\nX:0.41 Y:0.22",
+//     null,
+//     new Date().toISOString()
+//   );
+
+//   addCard(
+//     "Confidence: 67%\nCar detected\nX:0.11 Y:0.78",
+//     null,
+//     new Date().toISOString()
+//   );
+// }, 500);
+
+</script>
+</body>
+</html>

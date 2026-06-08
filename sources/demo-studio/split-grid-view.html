@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Dual Grid View (Meta + Video)</title>
+  <link rel="stylesheet" href="/fonts/fonts.css">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #0b1020;
+      color: #e6eeff;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    .backHotspot{
+      position: fixed; top: 0; left: 0; width: 72px; height: 72px; z-index: 9999; background: transparent;
+    }
+    .backBtn{
+      position: absolute; top: 10px; left: 10px;
+      display: inline-flex; align-items: center; justify-content: center;
+      height: 34px; padding: 0 12px; border-radius: 12px;
+      border: 1px solid rgba(148,163,184,0.35); background: rgba(13,20,40,0.72);
+      color: #e6eeff; font-size: 12px; text-decoration: none;
+      opacity: 0; transform: translateY(-4px); pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease, background 180ms ease, border-color 180ms ease;
+      backdrop-filter: blur(6px);
+    }
+    .backHotspot:hover .backBtn, .backHotspot:focus-within .backBtn {
+      opacity: 1; transform: translateY(0); pointer-events: auto;
+    }
+    .backBtn:hover { border-color: rgba(96,165,250,0.8); background: rgba(13,20,40,0.9); }
+
+    main{
+      display: grid;
+      grid-template-rows: auto 1fr auto auto;
+      height: 100vh;
+      gap: 6px;
+      padding: 6px;
+      min-height: 0;
+    }
+    .board{
+      display: grid;
+      gap: 6px;
+      background: #0a0f1e;
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      padding: 6px;
+      min-height: 0;
+    }
+    .board--bottom{
+      padding-top: 0;
+      align-content: start;
+    }
+
+    .tile{
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border-radius: 10px;
+      background: #000;
+    }
+    .tile--16x9{
+      aspect-ratio: 16 / 9;
+    }
+    .tile > iframe,
+    iframe{
+      width: 100%; height: 100%;
+      border: 0; border-radius: 10px;
+      background: #000; display: block; overflow: hidden;
+    }
+
+    .boardLabel{
+      display:flex; align-items:center; justify-content:center; text-align:center;
+      height: 28px; padding: 0 10px; margin: 6px 6px 0 6px;
+      color:#fde68a;
+      text-shadow: 0 0 6px rgba(253, 230, 138, 0.35);
+      font-size:12.75px; font-weight:700; letter-spacing:.18px;
+      background: linear-gradient(180deg, #5b7bd4 0%, #254fd6 100%);
+      border:1px solid #334155; border-radius:8px; opacity:.97;
+    }
+  </style>
+</head>
+<body>
+  <div class="backHotspot">
+    <a class="backBtn" href="index.html">← Back</a>
+  </div>
+
+  <main>
+
+    <div id="topLabel" class="boardLabel" style="display:none;"></div>
+
+
+    <section id="topBoard" class="board board--top"></section>
+
+    <div id="botLabel" class="boardLabel" style="display:none;"></div>
+
+    <section id="botBoard" class="board board--bottom"></section>
+  </main>
+
+  <script>
+    function clampInt(v, min, max, fallback){
+      const n = parseInt(v, 10);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.max(min, Math.min(max, n));
+    }
+
+    const p = new URLSearchParams(location.search);
+
+    const ws = (p.get('ws') || '').trim();
+    const port = (p.get('port') || '').trim();
+
+    const metaFont = (p.get('meta_font') || p.get('fontsize') || '').trim();
+
+    /* ── Top grid (with meta) ───────────────────────────────────────── */
+    const topRows = clampInt(p.get('top_rows') || '2', 1, 12, 2);
+    const topCols = clampInt(p.get('top_cols') || '3', 1, 12, 3);
+    const topIds = (p.get('top_ids') || '').split(',').map(s=>s.trim()).filter(Boolean);
+    const topThumb = (p.get('thumb') || '1').trim();
+    const layout = ((p.get('layout') || 'bottom').toLowerCase() === 'right') ? 'right' : 'bottom';
+
+    /* ── Bottom grid (video-only) ───────────────────────────────────── */
+    const botRows = clampInt(p.get('bot_rows') || '1', 1, 12, 1);
+    const botCols = clampInt(p.get('bot_cols') || '8', 1, 32, 8);
+    const botIds = (p.get('bot_ids') || '').split(',').map(s=>s.trim()).filter(Boolean);
+
+    function resolveTopLabel(){
+      const raw = p.get('top_label');
+      if (raw === null) return 'VLM';
+      if (String(raw).trim() === '') return 'top';
+      return String(raw).trim();
+    }
+    function resolveBotLabel(){
+      const raw = p.get('bot_label');
+      if (raw === null) return 'Detection';
+      if (String(raw).trim() === '') return 'bottom';
+      return String(raw).trim();
+    }
+
+    const topLabelText = resolveTopLabel();
+    const botLabelText = resolveBotLabel();
+
+    const topBoard = document.getElementById('topBoard');
+    const botBoard = document.getElementById('botBoard');
+    const topLabelEl = document.getElementById('topLabel');
+    const botLabelEl = document.getElementById('botLabel');
+
+    function setGrid(el, rows, cols){
+      el.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      el.style.gridTemplateRows = `repeat(${rows}, auto)`;
+    }
+
+    function makeTopTileUrl(idx){
+      const u = new URLSearchParams();
+      u.set('compact', '1');
+      u.set('layout', layout);
+      u.set('thumb', topThumb);
+
+      if (metaFont) u.set('meta_font', metaFont);
+
+      const sender = topIds[idx - 1] || '';
+      if (sender) u.set('sender', sender); else u.set('id', String(idx));
+      if (ws) u.set('ws', ws);
+      if (port) u.set('port', port);
+      return `webrtc.html?${u.toString()}`;
+    }
+
+    function makeBotTileUrl(idx){
+      const u = new URLSearchParams();
+      u.set('compact', '1');
+      u.set('video', '1');
+      u.set('videoOnly', '1');
+      u.set('thumb', '0');
+      u.set('videoar', '16:9');
+
+      if (metaFont) u.set('meta_font', metaFont);
+
+      const sender = botIds[idx - 1] || '';
+      if (sender) u.set('sender', sender); else u.set('id', String(idx));
+      if (ws) u.set('ws', ws);
+      if (port) u.set('port', port);
+      return `webrtc.html?${u.toString()}`;
+    }
+
+    function applyLabels(){
+      if (topLabelText) { topLabelEl.textContent = topLabelText; topLabelEl.style.display = 'flex'; }
+      if (botLabelText) { botLabelEl.textContent = botLabelText; botLabelEl.style.display = 'flex'; }
+    }
+
+    function build(){
+      applyLabels();
+
+      setGrid(topBoard, topRows, topCols);
+      topBoard.innerHTML = '';
+      const topTotal = topRows * topCols;
+      for (let i = 1; i <= topTotal; i++){
+        const f = document.createElement('iframe');
+        f.src = makeTopTileUrl(i);
+        topBoard.appendChild(f);
+      }
+
+      setGrid(botBoard, botRows, botCols);
+      botBoard.innerHTML = '';
+      const botTotal = botRows * botCols;
+      for (let i = 1; i <= botTotal; i++){
+        const wrap = document.createElement('div');
+        wrap.className = 'tile tile--16x9';
+        const f = document.createElement('iframe');
+        f.src = makeBotTileUrl(i);
+        wrap.appendChild(f);
+        botBoard.appendChild(wrap);
+      }
+    }
+
+    build();
+  </script>
+</body>
+</html>
