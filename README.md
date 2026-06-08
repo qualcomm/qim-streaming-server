@@ -6,42 +6,35 @@
 - [ ] Review the workflows in `.github/workflows`, updating as needed. See https://docs.github.com/en/actions for information on what these files do and how they work.
 - [ ] Review and update the suggested Issue and PR templates as needed in `.github/ISSUE_TEMPLATE` and `.github/PULL_REQUEST_TEMPLATE`
 
-# Project Name
+# Demo Studio V1
 
-*\<update with your project name and a short description\>*
+*Demo Studio V1 is a tool that enables users to stream video and metadata from a device to a web browser in real time using WebRTC. It allows visualization of both the video feed and structured detection data directly in the browser, providing a flexible and low-latency monitoring interface.*
 
 Project that does ... implemented in ... runs on Qualcomm® *\<processor\>*
 
-## Branches
-
-**main**: Primary development branch. Contributors should develop submissions based on this branch, and submit pull requests to this branch.
 
 ## Requirements
 
-List requirements to run the project, how to install them, instructions to use docker container, etc...
+ - Docker
 
 ## Installation Instructions
+ # Build and run
+(needs internet connection)<br>
+`docker-compose -f demo-studio/docker/docker-compose.yml up -d --build`
 
-How to install the software itself.
+# Save the image
+`docker save -o ../images/sig-service.tar sig-service:ubuntu20`
+
+# To run from the saved image (host the web UI)
+ - `cd demo-studio/docker/` <br>
+ - `docker load -i sig-service.tar` <br>
+ - `docker-compose up -d --no-build`
+
 
 ## Usage
 
-Describe how to use the project.
+ - After running the docker image, navigate to `<device-ip>:8080` in a browser on a machine in the same network
+ - Configure the desired settings from the UI
+ - Start a sender webrtc stream on a device in the same network
+ - Enter sender ID in the UI and press open
 
-## Development
-
-How to develop new features/fixes for the software. Maybe different than "usage". Also provide details on how to contribute via a [CONTRIBUTING.md file](CONTRIBUTING.md).
-
-## Getting in Contact
-
-How to contact maintainers. E.g. GitHub Issues, GitHub Discussions could be indicated for many cases. However a mail list or list of Maintainer e-mails could be shared for other types of discussions. E.g.
-
-* [Report an Issue on GitHub](../../issues)
-* [Open a Discussion on GitHub](../../discussions)
-* [E-mail us](mailto:REPLACE-ME@qti.qualcomm.com) for general questions
-
-## License
-
-*\<update with your project name and license\>*
-
-*\<REPLACE-ME\>* is licensed under the [BSD-3-clause License](https://spdx.org/licenses/BSD-3-Clause.html). See [LICENSE.txt](LICENSE.txt) for the full license text.
