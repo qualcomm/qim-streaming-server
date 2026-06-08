@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Ring View</title>
+  <link rel="stylesheet" href="/fonts/fonts.css">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: #0b1020;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    /* Back hover hotspot */
+    .backHotspot {
+      position: fixed; top: 0; left: 0;
+      width: 64px; height: 64px;
+      z-index: 9999; background: transparent;
+    }
+    .backBtn {
+      position: absolute; top: 10px; left: 10px;
+      height: 34px; padding: 0 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(148,163,184,0.35);
+      background: rgba(13,20,40,0.72);
+      color: #e6eeff; font-size: 12px;
+      cursor: pointer;
+      opacity: 0; transform: translateY(-4px);
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease, background 180ms ease, border-color 180ms ease;
+      backdrop-filter: blur(6px);
+    }
+    .backHotspot:hover .backBtn {
+      opacity: 1; transform: translateY(0); pointer-events: auto;
+    }
+    .backBtn:hover {
+      border-color: rgba(96,165,250,0.8);
+      background: rgba(13,20,40,0.9);
+    }
+
+    #ringGrid {
+      --cellW: 160px;
+      --cellH: 90px;
+      padding: 10px;
+      height: 100vh;
+      display: grid;
+      gap: 10px;
+      justify-content: center;
+      align-content: center;
+      overflow: hidden;
+    }
+    iframe.tile {
+      width: var(--cellW);
+      height: var(--cellH);
+      border: 0;
+      border-radius: 12px;
+      background: #000;
+      display: block;
+    }
+    iframe.center {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-radius: 12px;
+      background: #000;
+      display: block;
+      min-width: 0;
+      min-height: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="backHotspot">
+    <button class="backBtn" onclick="location.href='index.html'">← Back</button>
+  </div>
+
+  <div id="ringGrid"></div>
+
+  <script>
+    const DEFAULT_COLS = 6;
+    const DEFAULT_ROWS = 6;
+
+    function qs() { return new URLSearchParams(location.search); }
+    const p = qs();
+
+    const cols = Math.max(3, parseInt(p.get('cols') || DEFAULT_COLS, 10) || DEFAULT_COLS);
+    const rows = Math.max(3, parseInt(p.get('rows') || DEFAULT_ROWS, 10) || DEFAULT_ROWS);
+
+    const thumb = (p.get('thumb') || '1').trim();
+    const ws = (p.get('ws') || '').trim();
+    const port = (p.get('port') || '').trim();
+
+    const metaFont = (p.get('meta_font') || p.get('fontsize') || '').trim();
+
+    const idsRaw = (p.get('ids') || '');
+    const ids = idsRaw.split(',').map(s => s.trim());
+    let idx = 0;
+
+    const centerOverride = (p.get('center') || '').trim();
+
+    const gridEl = document.getElementById('ringGrid');
+
+    function computeCell16x9(cols, rows) {
+      const pad = 10;
+      const gap = 10;
+      const availW = window.innerWidth - pad * 2;
+      const availH = window.innerHeight - pad * 2;
+      const maxW_byWidth = (availW - (cols - 1) * gap) / cols;
+      const maxW_byHeight = ((availH - (rows - 1) * gap) * 16) / (rows * 9);
+      const cellW = Math.floor(Math.max(80, Math.min(maxW_byWidth, maxW_byHeight)));
+      const cellH = Math.floor(cellW * 9 / 16);
+      return { cellW, cellH };
+    }
+
+    function nextSender() {
+      const s = ids[idx];
+      idx++;
+      return (s || '').trim();
+    }
+
+    function makeViewerUrl({ sender, numericId, videoOnly }) {
+      const u = new URLSearchParams();
+      u.set('compact', '1');
+      u.set('layout', 'bottom');
+      u.set('thumb', thumb);
+
+      if (metaFont) u.set('meta_font', metaFont);
+
+      if (sender) u.set('sender', sender);
+      else u.set('id', String(numericId));
+      if (videoOnly) u.set('video', '1');
+      if (ws) u.set('ws', ws);
+      if (port) u.set('port', port);
+      return `webrtc.html?${u.toString()}`;
+    }
+
+    function rebuild() {
+      const { cellW, cellH } = computeCell16x9(cols, rows);
+      gridEl.style.setProperty('--cellW', `${cellW}px`);
+      gridEl.style.setProperty('--cellH', `${cellH}px`);
+      gridEl.style.gridTemplateColumns = `repeat(${cols}, var(--cellW))`;
+      gridEl.style.gridTemplateRows = `repeat(${rows}, var(--cellH))`;
+      gridEl.innerHTML = '';
+
+      let numericId = 1;
+      function addBorder(r, c) {
+        const f = document.createElement('iframe');
+        f.className = 'tile';
+        const sender = nextSender();
+        f.src = makeViewerUrl({ sender, numericId, videoOnly: true });
+        f.style.gridRow = String(r);
+        f.style.gridColumn = String(c);
+        gridEl.appendChild(f);
+        numericId++;
+      }
+
+      // Top row (1,1..cols)
+      for (let c = 1; c <= cols; c++) addBorder(1, c);
+      // Right col (2..rows-1, cols)
+      for (let r = 2; r <= rows - 1; r++) addBorder(r, cols);
+      // Bottom row (rows, cols..1)
+      for (let c = cols; c >= 1; c--) addBorder(rows, c);
+      // Left col (rows-1..2, 1)
+      for (let r = rows - 1; r >= 2; r--) addBorder(r, 1);
+
+      const center = document.createElement('iframe');
+      center.className = 'center';
+      const centerSender = centerOverride || nextSender();
+      center.src = makeViewerUrl({ sender: centerSender, numericId, videoOnly: false });
+      center.style.gridRow = `2 / ${rows}`;
+      center.style.gridColumn = `2 / ${cols}`;
+    }
+    window.addEventListener('resize', rebuild);
+    rebuild();
+  </script>
+</body>
+</html>
