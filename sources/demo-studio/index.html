@@ -59,6 +59,13 @@
       box-shadow:0 1px 0 rgba(255,255,255,0.04) inset;
     }
     .row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+
+    .rtspContainer{ display:flex; flex-direction:column; gap:8px; }
+    .rtspRow{ display:flex; align-items:center; gap:8px; }
+    .rtspRow .rtspTileLabel{
+      flex:0 0 64px; font-size:12px; opacity:.85; text-align:right; padding-right:4px;
+    }
+    .rtspRow input{ flex:1 1 auto; }
   </style>
 </head>
 <body>
@@ -121,9 +128,9 @@
         </div>
 
         <div id="rtspBox" class="hidden" style="grid-column: 1 / -1;">
-          <label for="rtspInput">RTSP Stream URL</label>
-          <input id="rtspInput" type="text" placeholder="rtsp://..." />
-          <div class="help">Enter RTSP stream address.</div>
+          <label>RTSP Stream URLs</label>
+          <div id="rtspContainer" class="rtspContainer"></div>
+          <div class="help" id="rtspHelp">One URL per tile. A tile with no URL is skipped. Each filled URL is automatically assigned that tile's WebRTC ID.</div>
         </div>
 
         <div id="centerBox" style="grid-column: 1 / -1;">
@@ -234,7 +241,8 @@
 
     const sourceTypeEl = document.getElementById("sourceType");
     const rtspBox = document.getElementById("rtspBox");
-    const rtspInput = document.getElementById("rtspInput");
+    const rtspContainer = document.getElementById("rtspContainer");
+    const rtspHelp = document.getElementById("rtspHelp");
 
     function syncMetaThumbState() {
       const enabled = metasEl.checked;
@@ -285,6 +293,30 @@
         vals.forEach(v=>container.appendChild(makeBox(v)));
       } else {
         [...container.querySelectorAll("input")].forEach((inp,i)=>inp.value=vals[i]);
+      }
+    }
+
+    function makeRtspRow(tileNumber, val){
+      const row=document.createElement("div"); row.className="rtspRow";
+      const label=document.createElement("span"); label.className="rtspTileLabel";
+      label.textContent = `Tile ${tileNumber}`;
+      const input=document.createElement("input");
+      input.type="text"; input.placeholder="rtsp://..."; input.value = val || "";
+      row.appendChild(label); row.appendChild(input);
+      return row;
+    }
+    function getRtspUrls(container){
+      // index-aligned with tile number (1-based); empty string = no stream for that tile
+      return [...container.querySelectorAll("input")].map(i=>i.value.trim());
+    }
+    function ensureRtspRows(container, n, seed=null){
+      const existing = getRtspUrls(container);
+      const base = (seed && seed.length) ? seed : existing;
+      if (container.children.length !== n){
+        container.innerHTML = "";
+        for (let i=0;i<n;i++) container.appendChild(makeRtspRow(i+1, base[i] ?? ""));
+      } else {
+        [...container.querySelectorAll("input")].forEach((inp,i)=>inp.value = base[i] ?? inp.value);
       }
     }
 
@@ -382,8 +414,15 @@
       // hide Tile IDs when RTSP is selected
       idsPrimaryBox.classList.toggle("hidden", isRTSP);
 
-      // show RTSP field only when RTSP selected
+      // show RTSP field(s) only when RTSP selected, sized to the tile count
       rtspBox.classList.toggle("hidden", !isRTSP);
+      if (isRTSP){
+        const n = isDual ? 1 : Math.max(1, outerCount());
+        ensureRtspRows(rtspContainer, n);
+        rtspHelp.textContent = (n > 1)
+          ? "One URL per tile. A tile with no URL is skipped. Each filled URL is automatically assigned that tile's WebRTC ID."
+          : "Enter the RTSP stream address.";
+      }
     }
 
     function saveCfg(){
@@ -394,6 +433,9 @@
         thumbs: !!thumbsEl.checked,
         center: centerIdEl.value.trim(),
         ids: getIds(idsContainer),
+
+        sourceType: sourceTypeEl.value,
+        rtspUrls: getRtspUrls(rtspContainer),
 
         topRows: +topRowsEl.value,
         topCols: +topColsEl.value,
@@ -431,6 +473,8 @@
 
       metaFontEl.value = clamp(cfg.metaFont ?? 12, 8, 48, 12);
 
+      sourceTypeEl.value = cfg.sourceType ?? "webrtc";
+
       prevT = null; prevB = null;
 
       updateUI();
@@ -440,6 +484,9 @@
         if (viewEl.value==="ring-view.html"||viewEl.value==="center-view.html"){
           centerIdEl.value = (cfg.center ?? "").trim();
           applyAutoCenter();
+        }
+        if (sourceTypeEl.value === "rtsp" && cfg.rtspUrls && cfg.rtspUrls.length){
+          ensureRtspRows(rtspContainer, Math.max(1, outerCount()), cfg.rtspUrls);
         }
       } else {
         const tN = (parseInt(topRowsEl.value)||2) * (parseInt(topColsEl.value)||3);
@@ -460,10 +507,15 @@
       }
 
       if (sourceTypeEl.value === "rtsp") {
-        const url = rtspInput.value.trim();
-        if (url) {
-          p.set("source_type", "rtsp");
-          p.set("source", url);
+        // Each filled RTSP row is auto-assigned its tile position (1-based)
+        // as its WebRTC ID - the adapter for that stream is started
+        // separately (see the Open button handler) using the same ID, so
+        // the view page just treats each tile as a normal id-based WebRTC
+        // connection once the streams are already running server-side.
+        const urls = getRtspUrls(rtspContainer);
+        const ids = urls.map((u, i) => u ? String(i + 1) : "");
+        if (ids.some(Boolean)) {
+          p.set("ids", ids.join(","));
         }
       } else {
         // WebRTC (existing behavior)
@@ -471,8 +523,8 @@
         if (ids.length) {
           p.set("ids", ids.join(","));
         }
-        p.set("source_type", "webrtc");
       }
+      p.set("source_type", "webrtc");
 
       if (v === "ring-view.html" || v === "center-view.html"){
         p.set("center", centerIdEl.value.trim() || centerDefault());
@@ -516,6 +568,9 @@
         thumbs: !!thumbsEl.checked,
         center: centerIdEl.value.trim(),
         ids: getIds(idsContainer),
+
+        sourceType: sourceTypeEl.value,
+        rtspUrls: getRtspUrls(rtspContainer),
 
         topRows: +topRowsEl.value,
         topCols: +topColsEl.value,
@@ -587,7 +642,8 @@
       metasEl.addEventListener("change", () => {syncMetaThumbState(); saveCfg();});
       centerIdEl.addEventListener("input", saveDeb);
       idsContainer.addEventListener("input", saveDeb);
-      sourceTypeEl.addEventListener("change", () => {updateUI();});
+      rtspContainer.addEventListener("input", saveDeb);
+      sourceTypeEl.addEventListener("change", () => {updateUI(); saveCfg();});
 
       const dualCountChanged = ()=>{ updateUI(); saveDeb(); };
       topRowsEl.addEventListener("input", dualCountChanged);
@@ -606,12 +662,12 @@
         saveCfg();
 
         if (sourceTypeEl.value === "rtsp") {
-          const url = rtspInput.value.trim();
+          const urls = getRtspUrls(rtspContainer);
 
-          if (url) {
-            const id = "1";
-
-            await fetch("/start-rtsp", {
+          await Promise.all(urls.map((url, i) => {
+            if (!url) return null;
+            const id = String(i + 1);
+            return fetch("/start-rtsp", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json"
@@ -620,14 +676,8 @@
                 rtsp_url: url,
                 webrtc_id: id
               })
-            });
-
-            // pass ID to viewer
-            const target = buildUrl();
-            location.href = target + (target.includes("?") ? "&" : "?") + "ids=" + id;
-
-            return;
-          }
+            }).catch(() => {});
+          }));
         }
 
         location.href = buildUrl();

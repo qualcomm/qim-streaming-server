@@ -160,6 +160,7 @@ button{
   </section>
 </main>
 
+<script src="webrtc-viewer.js"></script>
 <script>
 
 const qs = new URLSearchParams(location.search);
@@ -175,18 +176,8 @@ if (!metaEnabled) {
 }
 
 (function applyFeedMetaFont(){
-  const raw = (qs.get("meta_font") || qs.get("fontsize") || "").trim();
-  if (!raw) return;
-  let px;
-  const n = Number(raw);
-  if (Number.isFinite(n)) {
-    const c = Math.max(8, Math.min(48, n));
-    px = `${c}px`;
-  } else {
-    const m = raw.match(/^(\d+(?:\.\d+)?)/);
-    if (m) { const c = Math.max(8, Math.min(48, Number(m[1]))); px = `${c}px`; }
-    else { px = raw; }
-  }
+  const px = WebRTCViewer.resolveMetaFontPx(qs);
+  if (!px) return;
   document.documentElement.style.setProperty('--meta-font', px);
 })();
 
@@ -212,7 +203,6 @@ function status(t,c){
   statusEl.classList.remove("ok","bad");
   if(c) statusEl.classList.add(c);
 }
-function revokeURL(url){ try{ URL.revokeObjectURL(url); }catch{} }
 
 function toISOFromMaybeEpoch(v){
   if (v == null) return null;
@@ -311,7 +301,6 @@ function renderLiveDetections(obj){
       left.appendChild(subWrap);
 
       card.appendChild(left);
-      feedEl.prepend(card);
 
       card._title = title;
       card._meta = meta;
@@ -319,6 +308,9 @@ function renderLiveDetections(obj){
 
       liveCards.set(key, card);
     }
+
+    // keep DOM order in sync with the sorted order computed above
+    feedEl.appendChild(card);
 
     // main info
     card._title.textContent = `${o.label} #${idx + 1}`;
@@ -387,7 +379,7 @@ function addCard(metaText, thumbUrl, timestampISO){
 }
 
 /* ========== WebRTC / signalling ========== */
-let ws=null, pc=null, dcOpen=false;
+let dcOpen=false;
 let targetId=getSenderId();
 senderEl.textContent=targetId || "—";
 let lastPretty = "";
@@ -400,32 +392,50 @@ function cleanupChunks(maxAgeMs=8000){
     if (!rec || (now - rec.t0) > maxAgeMs) thumbAssemblies.delete(id);
   }
 }
-function ensurePC(){
-  if (pc) return pc;
-  pc=new RTCPeerConnection({
-    iceServers:[
-      {urls:"stun:stun.services.mozilla.com"},
-      {urls:"stun:stun.l.google.com:19302"}
-    ]
-  });
-  pc.ontrack=e=>{
-    const s=e.streams&&e.streams[0]?e.streams[0]:new MediaStream([e.track]);
-    videoEl.srcObject=s; videoEl.play().catch(()=>{});
-    status("VIDEO","ok");
-  };
-  pc.ondatachannel=e=>{
-    const ch=e.channel;
-    if(ch.label==="meta") status("META","ok");
-    ch.onopen =()=>{ dcOpen=true; status("META","ok"); };
-    ch.onclose=()=>{ dcOpen=false; status("META OFF","bad"); };
-    ch.onerror=()=> status("META ERR","bad");
-    ch.onmessage=(ev)=>{
+/* base64 → ObjectURL */
+let lastThumbURL=null;
+function b64ToObjectURL(b64){
+  const url = WebRTCViewer.decodeBase64ToBlobURL(b64, lastThumbURL);
+  if (url) lastThumbURL = url;
+  return url;
+}
+/* WS / signalling */
+const engine = WebRTCViewer.create({
+  getWsUrl: wsURL,
+  retryOnErrorMs: 1000,
+  // single-view.html's HELLO id has always used a "v"-prefixed random
+  // number, distinct from webrtc.js's plain-numeric one - preserved here
+  // so the wire format doesn't change for either page.
+  createHelloId: () => "v"+Math.floor(Math.random()*90000+10000),
+  hooks: {
+    onOpen(){
+      engine.sendSession(targetId);
+      status("SESSION",null);
+    },
+    onWsError(){ status("WS ERR","bad"); retry(); },
+    onWsClose(){ status("WS OFF","bad"); retry(); },
+    onSessionRetry(){ status("SESSION",null); },
+    onSessionError(){ status("RETRY","bad"); },
+    onProtocolError(kind){
+      if (kind === "parse") status("PARSE","bad");
+      // any other kind (e.g. a JSON message with neither sdp nor ice) falls
+      // through silently, matching this page's original onWS behavior.
+    },
+    onTrack(e){
+      const s=e.streams&&e.streams[0]?e.streams[0]:new MediaStream([e.track]);
+      videoEl.srcObject=s; videoEl.play().catch(()=>{});
+      status("VIDEO","ok");
+      engine.markConnected();
+    },
+    onDataChannel(ch){
+      if(ch.label==="meta") status("META","ok");
+    },
+    onMetaOpen(){ dcOpen=true; status("META","ok"); },
+    onMetaClose(){ dcOpen=false; status("META OFF","bad"); },
+    onMetaError(){ status("META ERR","bad"); },
+    onMetaMessage(obj, raw){
       if (!metaEnabled) return;
 
-      const raw = String(ev.data||"");
-      console.log("RAW META MSG:", raw);
-      let obj=null;
-      try { obj = JSON.parse(raw); } catch {}
       if (!obj || typeof obj !== "object") {
         lastPretty = raw.trim();
         return;
@@ -436,8 +446,8 @@ function ensurePC(){
       }
 
       if (obj.object_detection) {
-      renderLiveDetections(obj);
-    }
+        renderLiveDetections(obj);
+      }
 
       const t = obj.type;
       const isThumb = (t==="thumb" || t==="thumb-begin" || t==="thumb-chunk" || t==="thumb-end");
@@ -477,85 +487,22 @@ function ensurePC(){
         addCard(lastPretty, url, a.ts || lastMetaTS);
         return;
       }
-    };
-  };
-  pc.onicecandidate=e=>{
-    if(e.candidate && ws && ws.readyState===1){
-      ws.send(JSON.stringify({ice:{candidate:e.candidate.candidate, sdpMLineIndex:e.candidate.sdpMLineIndex}}));
+    },
+    onIceStateChange(st){
+      if (st === "failed" || st === "disconnected" || st === "closed") {
+        status("ICE "+st.toUpperCase(),"bad");
+      }
     }
-  };
-  pc.oniceconnectionstatechange = () => {
-    const st = pc.iceConnectionState;
-    if (st === "failed" || st === "disconnected" || st === "closed") {
-      status("ICE "+st.toUpperCase(),"bad");
-    }
-  };
-  return pc;
-}
-/* base64 → ObjectURL */
-let lastThumbURL=null;
-function b64ToObjectURL(b64){
-  try{
-    if(b64.startsWith("data:image")){
-      const i=b64.indexOf(",");
-      if(i>=0) b64=b64.slice(i+1);
-    }
-    const bin=atob(b64);
-    const arr=new Uint8Array(bin.length);
-    for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-    const blob=new Blob([arr],{type:"image/jpeg"});
-    if (lastThumbURL) revokeURL(lastThumbURL);
-    lastThumbURL = URL.createObjectURL(blob);
-    return lastThumbURL;
-  }catch{return null;}
-}
-/* WS / signalling */
-async function onWS(ev){
-  const data=ev.data;
-  if(typeof data==="string" && data.startsWith("HELLO")) return;
-  if(data==="SESSION_OK"){
-    try{ ws.send(JSON.stringify({cmd:"READY"})); }catch{}
-    return;
   }
-  if(typeof data==="string" && data.startsWith("ERROR")){
-    status("ERR","bad"); return;
-  }
-  let msg;
-  try{ msg=JSON.parse(data); }catch{ status("PARSE","bad"); return; }
-  const p=ensurePC();
-  if(msg.sdp){
-    await p.setRemoteDescription(msg.sdp);
-    if(msg.sdp.type==="offer"){
-      const ans=await p.createAnswer();
-      await p.setLocalDescription(ans);
-      ws.send(JSON.stringify({sdp:p.localDescription}));
-    }
-    return;
-  }
-  if(msg.ice){
-    try{ await p.addIceCandidate(new RTCIceCandidate(msg.ice)); }catch{}
-    return;
-  }
-}
+});
 function connectWS(){
-  ws=new WebSocket(wsURL());
   status("WS",null);
-  ws.onopen=()=>{
-    const peer="v"+Math.floor(Math.random()*90000+10000);
-    ws.send("HELLO "+peer);
-    ws.send("SESSION "+targetId);
-    status("SESSION",null);
-  };
-  ws.onmessage=onWS;
-  ws.onerror=()=>{ status("WS ERR","bad"); retry(); };
-  ws.onclose =()=>{ status("WS OFF","bad"); retry(); };
+  engine.connect();
 }
 function retry(){
+  engine.stopSessionRetry();
   setTimeout(()=>{
-    try{ws.close();}catch{}
-    ws=null;
-    try{pc && pc.close();}catch{}
-    pc=null;
+    engine.disconnect();
     connectWS();
   }, 1200);
 }
