@@ -175,6 +175,7 @@
       center.src = makeViewerUrl({ sender: centerSender, numericId, videoOnly: false });
       center.style.gridRow = `2 / ${rows}`;
       center.style.gridColumn = `2 / ${cols}`;
+      gridEl.appendChild(center);
     }
     window.addEventListener('resize', rebuild);
     rebuild();

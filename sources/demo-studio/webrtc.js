@@ -1,9 +1,7 @@
 // Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 
-let peer_id = null;
 let ws_conn = null;
-let peer_connection = null;
 let _connected = false;
 
 let _metaLayout = "right";
@@ -12,21 +10,7 @@ function qs() { return new URLSearchParams(window.location.search); }
 const _thumbEnabled = (qs().get("thumb") !== "0");
 
 function readMetaFontPx() {
-
-  const raw = (qs().get('meta_font') || qs().get('fontsize') || '').trim();
-  if (!raw) return null;
-  const num = Number(raw);
-  if (Number.isFinite(num)) {
-    const clamped = Math.max(8, Math.min(48, num));
-    return `${clamped}px`;
-  }
-  const m = raw.match(/^(\d+(?:\.\d+)?)/);
-  if (m) {
-    const clamped = Math.max(8, Math.min(48, Number(m[1])));
-    return `${clamped}px`;
-  }
-
-  return raw;
+  return WebRTCViewer.resolveMetaFontPx(qs());
 }
 
 let _metaFontApplied = null;
@@ -48,40 +32,6 @@ function enforceMetaFont(px) {
     #rightPane, #rightPane * { font-size: ${px} !important; }
   `;
   _metaFontApplied = px;
-}
-
-async function maybeStartRTSP() {
-  const params = new URLSearchParams(window.location.search);
-
-  const type = params.get("source_type");
-  const rtsp = params.get("source");
-
-  if (type !== "rtsp" || !rtsp) return;
-
-  const id =
-    window._target_sender_id ||
-    params.get("id") ||
-    (params.get("ids") || "").split(",")[0];
-
-  if (!id) return;
-
-  if (window._rtspStarted) return;
-  window._rtspStarted = true;
-
-  try {
-    await fetch("/start-rtsp", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        rtsp_url: rtsp,
-        webrtc_id: id
-      })
-    });
-  } catch (e) {
-    console.error("RTSP start failed", e);
-  }
 }
 
 let retryTimer = null;
@@ -173,22 +123,11 @@ function setMetaThumbFromBase64(b64) {
   if (!b64 || typeof b64 !== "string" || b64.length < 32) {
     clearThumb(); return;
   }
-
-  if (b64.startsWith("data:image")) {
-    const comma = b64.indexOf(",");
-    if (comma >= 0) b64 = b64.slice(comma + 1);
-  }
-  try {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const blob = new Blob([bytes], { type: "image/jpeg" });
-    const url = URL.createObjectURL(blob);
-    if (lastThumbUrl) URL.revokeObjectURL(lastThumbUrl);
-    lastThumbUrl = url;
-    img.src = url;
-    img.style.display = "block";
-  } catch (e) { clearThumb(); }
+  const url = WebRTCViewer.decodeBase64ToBlobURL(b64, lastThumbUrl);
+  if (!url) { clearThumb(); return; }
+  lastThumbUrl = url;
+  img.src = url;
+  img.style.display = "block";
 }
 
 function placeThumb(mode /* 'right' | 'bottom' */) {
@@ -297,118 +236,80 @@ window.addEventListener("message", (ev) => {
   }
 });
 
-function websocketServerConnect() {
-  let ws_url;
-  try { ws_url = getWsUrl(); }
-  catch (e) { setStatus("ERR", "bad"); return; }
-
-  resetConnected();
-  setStatus("WS");
-  ws_conn = new WebSocket(ws_url);
-
-  ws_conn.addEventListener("open", () => {
-    peer_id = String(Math.floor(Math.random() * 90000) + 1000);
-    ws_conn.send("HELLO " + peer_id);
-    const target = window._target_sender_id;
-    if (target) {
-      ws_conn.send("SESSION " + target);
-      setStatus("SESSION");
-      setTargetIdLabel(target);
-    } else {
-      setStatus("READY");
-    }
-    // ★ ADDED: enforce font once WS opens (safe point)
-    applyMetaFontIfNeeded();
-  });
-
-  ws_conn.addEventListener("message", onServerMessage);
-  ws_conn.addEventListener("error", () => {
-    setStatus("ERR", "bad");
-    notifyParent("webrtc-disconnected");
-    window.setTimeout(websocketServerConnect, 2000);
-  });
-  ws_conn.addEventListener("close", () => {
-    setStatus("OFF", "bad");
-    notifyParent("webrtc-disconnected");
-    if (peer_connection) {
-      try { peer_connection.close(); } catch (e) {}
-      peer_connection = null;
-    }
-    window.setTimeout(websocketServerConnect, 1000);
-  });
-}
-
-async function onServerMessage(event) {
-  const data = event.data;
-  if (typeof data === "string" && data.startsWith("HELLO")) {
-    if (!window._target_sender_id) setStatus("READY");
-    return;
-  }
-  if (data === "SESSION_OK") {
-    setStatus("NEG");
-    try { ws_conn.send(JSON.stringify({ cmd: "READY" })); } catch (e) {}
-    return;
-  }
-  if (typeof data === "string" && data.startsWith("ERROR")) {
-    setStatus("ERR", "bad");
-    notifyParent("webrtc-disconnected");
-    return;
-  }
-  let msg;
-  try { msg = JSON.parse(data); }
-  catch { setStatus("ERR", "bad"); return; }
-
-  if (!peer_connection) createPeer();
-
-  if (msg.sdp) {
-    await onIncomingSDP(msg.sdp);
-  } else if (msg.ice) {
-    await onIncomingICE(msg.ice);
-  } else {
-    setStatus("ERR", "bad");
-  }
-}
-
-// ---------------- WebRTC ----------------
-function createPeer() {
-  peer_connection = new RTCPeerConnection({
-    iceServers: [
-      { urls: "stun:stun.services.mozilla.com" },
-      { urls: "stun:stun.l.google.com:19302" }
-    ]
-  });
-  setStatus("WAIT");
-
-  const v = getVideoEl();
-  if (v) {
-    v.onplaying = () => markConnected();
-    v.onloadeddata = () => { if (v.readyState >= 2) markConnected(); };
-  }
-
-  peer_connection.ontrack = (ev) => {
-    const v2 = getVideoEl();
-    const ms = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
-    if (v2 && v2.srcObject !== ms) v2.srcObject = ms;
-    if (v2) v2.play().catch(() => {});
-  };
-
-  peer_connection.ondatachannel = (ev) => {
-    const ch = ev.channel;
-    if (ch.label === "meta") setMetaStatus("OK");
-
-    ch.onopen = () => {
-      setMetaStatus("OK");
-      // ★ ADDED: enforce font as soon as meta channel is up
+// ---------------- WebRTC / signaling engine ----------------
+const engine = WebRTCViewer.create({
+  getWsUrl,
+  hooks: {
+    onOpen() {
+      const target = window._target_sender_id;
+      if (target) {
+        engine.sendSession(target);
+        setStatus("SESSION");
+        setTargetIdLabel(target);
+      } else {
+        setStatus("READY");
+      }
       applyMetaFontIfNeeded();
-    };
-    ch.onclose = () => setMetaStatus("OFF");
-    ch.onerror = () => setMetaStatus("ERR");
-
-    ch.onmessage = (m) => {
-      const raw = String(m.data);
-      let obj = null;
-      try { obj = JSON.parse(raw); }
-      catch { setMetaText(raw); return; }
+    },
+    onWsError() {
+      setStatus("ERR", "bad");
+      notifyParent("webrtc-disconnected");
+      window.setTimeout(websocketServerConnect, 2000);
+    },
+    onWsClose() {
+      setStatus("OFF", "bad");
+      notifyParent("webrtc-disconnected");
+      engine.closePeerConnection();
+      window.setTimeout(websocketServerConnect, 1000);
+    },
+    onHello() {
+      if (!window._target_sender_id) setStatus("READY");
+    },
+    onSessionOk() {
+      setStatus("NEG");
+    },
+    onSessionError() {
+      setStatus("ERR", "bad");
+      notifyParent("webrtc-disconnected");
+    },
+    onProtocolError() {
+      setStatus("ERR", "bad");
+    },
+    onAnswering() {
+      setStatus("ANSWER");
+    },
+    onAnswerSent() {
+      setStatus("WAIT");
+    },
+    onPeerCreated() {
+      setStatus("WAIT");
+      const v = getVideoEl();
+      if (v) {
+        v.onplaying = () => markConnected();
+        v.onloadeddata = () => { if (v.readyState >= 2) markConnected(); };
+      }
+    },
+    onTrack(ev) {
+      const v2 = getVideoEl();
+      const ms = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
+      if (v2 && v2.srcObject !== ms) v2.srcObject = ms;
+      if (v2) v2.play().catch(() => {});
+    },
+    onDataChannel(ch) {
+      if (ch.label === "meta") setMetaStatus("OK");
+    },
+    onMetaOpen() {
+      setMetaStatus("OK");
+      applyMetaFontIfNeeded();
+    },
+    onMetaClose() {
+      setMetaStatus("OFF");
+    },
+    onMetaError() {
+      setMetaStatus("ERR");
+    },
+    onMetaMessage(obj, raw) {
+      if (typeof obj === "undefined") { setMetaText(raw); return; }
 
       if (handleStatusMessage(obj)) return;
       // If it was thumb or thumb-chunk, handled (or ignored) here
@@ -444,33 +345,25 @@ function createPeer() {
         const b64 = obj.thumb_jpeg_b64 ?? obj.buffer_base64 ?? null;
         setMetaThumbFromBase64(b64);
       }
-    };
-  };
-
-  peer_connection.onicecandidate = (ev) => {
-    if (ev.candidate) {
-      try {
-        ws_conn.send(JSON.stringify({
-          ice: {
-            candidate: ev.candidate.candidate,
-            sdpMLineIndex: ev.candidate.sdpMLineIndex
-          }
-        }));
-      } catch (e) {}
+    },
+    onIceStateChange(st) {
+      if (st === "failed" || st === "disconnected" || st === "closed") {
+        notifyParent("webrtc-disconnected");
+        if (!_connected) setStatus("OFF", "bad");
+      }
     }
-  };
+  }
+});
 
-  peer_connection.oniceconnectionstatechange = () => {
-    const st = peer_connection.iceConnectionState;
-    if (st === "failed" || st === "disconnected" || st === "closed") {
-      notifyParent("webrtc-disconnected");
-      if (!_connected) setStatus("OFF", "bad");
-    }
-  };
+function websocketServerConnect() {
+  resetConnected();
+  setStatus("WS");
+  ws_conn = engine.connect();
 }
 
 /* --- Dynamic split: keep ~16:9 video in meta-bottom mode --- */
 function adjustMetaHeightToKeepVideo16x9() {
+  if (!document.body) return;
   if (!document.body.classList.contains('meta-bottom')) return;
   if (document.body.classList.contains('video-only')) return;
 
@@ -503,7 +396,6 @@ if (window.ResizeObserver && metaBox) {
   ro.observe(metaBox);
 }
 
-// ★ ADDED: ensure font is enforced on load as well
 applyMetaFontIfNeeded();
 
 function connectToSender() {
@@ -518,44 +410,21 @@ function connectToSender() {
 
   if (ws_conn && ws_conn.readyState === WebSocket.OPEN) {
     setStatus("SESSION");
-    try { ws_conn.send("SESSION " + target); } catch (e) {}
+    engine.sendSession(target);
   } else {
     setStatus("WS");
-    websocketServerConnect();
+    ws_conn = engine.connect();
   }
 }
 
-async function onIncomingSDP(sdp) {
-  await peer_connection.setRemoteDescription(sdp);
-  if (sdp.type !== "offer") return;
-  setStatus("ANSWER");
-  const answer = await peer_connection.createAnswer();
-  await peer_connection.setLocalDescription(answer);
-  try { ws_conn.send(JSON.stringify({ sdp: peer_connection.localDescription })); } catch (e) {}
-  setStatus("WAIT");
-}
-
-async function onIncomingICE(ice) {
-  try { await peer_connection.addIceCandidate(new RTCIceCandidate(ice)); } catch (e) {}
-}
-
-// ✅ STARTUP HOOK (THIS IS WHAT YOU ARE MISSING)
-
 window.addEventListener("DOMContentLoaded", async () => {
-
-  // ✅ initialize target id EARLY
   const params = new URLSearchParams(window.location.search);
 
   window._target_sender_id =
     params.get("id") ||
+    params.get("sender") ||
     (params.get("ids") || "").split(",")[0];
 
-  // ✅ 1. start RTSP adapter (if needed)
-  await maybeStartRTSP();
-
-  // ✅ 2. start retry loop
   startRetry();
-
-  // ✅ 3. start websocket
   websocketServerConnect();
 });

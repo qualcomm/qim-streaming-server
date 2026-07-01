@@ -6,6 +6,8 @@
 #
 #  Author: Nirbheek Chauhan <nirbheek@centricular.com>
 #
+# Modifications Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-2-Clause AND BSD-3-Clause-Clear
 
 import os
 import sys
