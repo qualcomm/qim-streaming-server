@@ -30,13 +30,31 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
+            existing = RUNNING.get(webrtc_id)
+            if existing is not None and existing["proc"].poll() is None:
+                if existing["rtsp_url"] == rtsp_url:
+                    print(f"[CONTROL] RTSP adapter for {webrtc_id} already running "
+                          f"(pid={existing['proc'].pid}), skipping")
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+
+                print(f"[CONTROL] RTSP source changed for {webrtc_id}, "
+                      f"stopping old adapter (pid={existing['proc'].pid})")
+                existing["proc"].terminate()
+                try:
+                    existing["proc"].wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    existing["proc"].kill()
+                    existing["proc"].wait(timeout=2)
+
             print(f"[CONTROL] Start RTSP: {rtsp_url} → {webrtc_id}")
 
             proc = subprocess.Popen(
                 ["python3", "/service/rtsp-adapter.py", rtsp_url, webrtc_id]
             )
 
-            RUNNING[webrtc_id] = proc.pid
+            RUNNING[webrtc_id] = {"proc": proc, "rtsp_url": rtsp_url}
 
             self.send_response(200)
             self.end_headers()
